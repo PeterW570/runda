@@ -6,8 +6,10 @@ import (
 	"log/slog"
 	"os"
 	"runtime/debug"
+	"time"
 
-	"peterweightman.com/dgstats/internal/env"
+	"peterweightman.com/runda/internal/database"
+	"peterweightman.com/runda/internal/env"
 
 	"github.com/lmittmann/tint"
 )
@@ -18,11 +20,20 @@ type config struct {
 	httpPort int
 	env      string
 	baseURL  string
+	db       struct {
+		dsn          string
+		automigrate  bool
+		maxOpenConns int
+		maxIdleConns int
+		maxIdleTime  time.Duration
+		maxLifetime  time.Duration
+	}
 }
 
 type application struct {
 	config config
 	logger *slog.Logger
+	models database.Models
 }
 
 func main() {
@@ -39,9 +50,16 @@ func main() {
 func run(logger *slog.Logger) error {
 	var cfg config
 
-	cfg.baseURL = env.GetString("BASE_URL", "http://localhost:4444")
-	cfg.httpPort = env.GetInt("HTTP_PORT", 4444)
-	cfg.env = env.GetString("ENV", "development")
+	flag.StringVar(&cfg.baseURL, "base-url", "http://localhost:4000", "Base URL")
+	flag.IntVar(&cfg.httpPort, "port", 4000, "API server port")
+	flag.StringVar(&cfg.env, "env", env.GetString("ENV", "development"), "Environment (development|staging|production) [env var: ENV]")
+
+	flag.StringVar(&cfg.db.dsn, "db-dsn", env.GetString("DB_DSN", ""), "PostgreSQL DSN [env var: DB_DSN]")
+	flag.BoolVar(&cfg.db.automigrate, "db-automigrate", env.GetBool("DB_AUTOMIGRATE", true), "Automigrate database [env var: DB_AUTOMIGRATE]")
+	flag.IntVar(&cfg.db.maxOpenConns, "db-max-open-conns", env.GetInt("DB_MAX_OPEN_CONNS", 25), "PostgreSQL max open connections [env var: DB_MAX_OPEN_CONNS]")
+	flag.IntVar(&cfg.db.maxIdleConns, "db-max-idle-conns", env.GetInt("DB_MAX_IDLE_CONNS", 25), "PostgreSQL max idle connections [env var: DB_MAX_IDLE_CONNS]")
+	flag.DurationVar(&cfg.db.maxIdleTime, "db-max-idle-time", env.GetDuration("DB_MAX_IDLE_TIME", time.Minute, 15), "PostgreSQL max connection idle time (mins) [env var: DB_MAX_IDLE_TIME]")
+	flag.DurationVar(&cfg.db.maxLifetime, "db-max-lifetime", env.GetDuration("DB_MAX_LIFETIME", time.Hour, 2), "PostgreSQL max connection lifetime (hours) [env var: DB_MAX_IDLE_TIME]")
 
 	showVersion := flag.Bool("version", false, "display version and exit")
 
@@ -52,9 +70,27 @@ func run(logger *slog.Logger) error {
 		return nil
 	}
 
+	if cfg.db.dsn == "" {
+		panic("DB_DSN environment variable is not set")
+	}
+
+	db, err := database.New(cfg.db.dsn, cfg.db.automigrate, database.DbPoolConfig{
+		MaxOpenConns: cfg.db.maxOpenConns,
+		MaxIdleConns: cfg.db.maxIdleConns,
+		MaxIdleTime:  cfg.db.maxIdleTime,
+		MaxLifetime:  cfg.db.maxLifetime,
+	}, logger)
+	if err != nil {
+		logger.Error(err.Error())
+		os.Exit(1)
+	}
+	defer db.Close()
+	logger.Info("database connection pool established")
+
 	app := &application{
 		config: cfg,
 		logger: logger,
+		models: database.NewModels(db),
 	}
 
 	return app.serveHTTP()

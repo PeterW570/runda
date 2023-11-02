@@ -7,11 +7,10 @@ import (
 )
 
 func (app *application) healthCheck(c echo.Context) error {
-	data := map[string]string{
-		"Status": "OK",
+	data := envelope{
+		"Status":  "OK",
+		"Version": version,
 	}
-
-	app.logger.Info("Health check")
 
 	return c.JSON(http.StatusOK, data)
 }
