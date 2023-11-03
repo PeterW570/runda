@@ -7,6 +7,7 @@ import (
 
 	"github.com/labstack/echo/v4"
 	"peterweightman.com/runda/internal/database"
+	"peterweightman.com/runda/internal/validation"
 )
 
 func (app *application) createCourse(c echo.Context) error {
@@ -127,4 +128,44 @@ func (app *application) deleteCourse(c echo.Context) error {
 	}
 
 	return c.NoContent(http.StatusOK)
+}
+
+func (app *application) listCourses(c echo.Context) error {
+	var input struct {
+		Name string
+		Tags []string
+		database.Filters
+	}
+
+	input.Name = c.QueryParam("name")
+	input.Tags = app.readCSV(c, "tags", []string{})
+
+	var err error
+	input.Filters.Page, err = app.readInt(c, "page", 1)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid page number")
+	}
+	input.Filters.PageSize, err = app.readInt(c, "page_size", 20)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid page size")
+	}
+
+	input.Filters.Sort = c.QueryParam("sort")
+	if input.Filters.Sort == "" {
+		input.Filters.Sort = "id"
+	}
+
+	input.Filters.SortSafelist = []string{"id", "name", "-id", "-name"}
+
+	if err = validation.ValidateFilters(input.Filters); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+	}
+
+	courses, metadata, err := app.models.Courses.GetAll(input.Name, input.Tags, input.Filters)
+	if err != nil {
+		app.logger.Error("Error getting courses", "error", err)
+		return echo.ErrInternalServerError
+	}
+
+	return c.JSON(http.StatusOK, envelope{"courses": courses, "metadata": metadata})
 }

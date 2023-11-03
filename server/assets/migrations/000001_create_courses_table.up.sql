@@ -10,3 +10,5 @@ CREATE TABLE IF NOT EXISTS courses (
     tags text [] NOT NULL DEFAULT '{}'::text [],
     website text
 );
+CREATE INDEX IF NOT EXISTS courses_name_idx ON courses USING GIN (to_tsvector('simple', name));
+CREATE INDEX IF NOT EXISTS courses_tags_idx ON courses USING GIN (tags);

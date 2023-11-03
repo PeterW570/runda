@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -146,4 +147,60 @@ func (c CourseModel) Delete(id int64) error {
 	}
 
 	return nil
+}
+
+func (c CourseModel) GetAll(name string, tags []string, filters Filters) ([]*Course, Metadata, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+	defer cancel()
+
+	query := fmt.Sprintf(`
+		SELECT count(*) OVER(), id, created_at, last_updated_at, version, name, description, location[0] as longitude, location[1] as latitude, tags, website
+		FROM courses
+		WHERE (to_tsvector('simple', name) @@ plainto_tsquery('simple', $1) OR $1 = '') 
+        AND (tags @> $2 OR $2 = '{}')
+		ORDER BY %s %s, id ASC
+		LIMIT $3 OFFSET $4`, filters.sortColumn(), filters.sortDirection())
+
+	args := []any{name, pq.Array(tags), filters.limit(), filters.offset()}
+
+	rows, err := c.DB.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, Metadata{}, err
+	}
+
+	defer rows.Close()
+
+	totalRecords := 0
+	courses := []*Course{}
+
+	for rows.Next() {
+		var course Course
+
+		err := rows.Scan(
+			&totalRecords,
+			&course.ID,
+			&course.CreatedAt,
+			&course.LastUpdatedAt,
+			&course.Version,
+			&course.Name,
+			&course.Description,
+			&course.Location.Longitude,
+			&course.Location.Latitude,
+			pq.Array(&course.Tags),
+			&course.Website,
+		)
+		if err != nil {
+			return nil, Metadata{}, err
+		}
+
+		courses = append(courses, &course)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, Metadata{}, err
+	}
+
+	metadata := calculateMetadata(totalRecords, filters.Page, filters.PageSize)
+
+	return courses, metadata, nil
 }
